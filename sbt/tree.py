@@ -142,17 +142,22 @@ class ScreeningTree:
         lam = self.params.lam
 
         def g_fn(idx: np.ndarray):
-            # Normalise g per node so norm_gain ∈ [0, 1] regardless of scale.
-            # Step 1: centre → G_total = 0, so parent term = 0 in gain.
-            # Step 2: divide by std → norm_gain becomes fraction-of-variance
-            #   explained, which is O(1) across both tree depth and boosting
-            #   rounds (residuals shrink → gains stay in the same [0,1] range).
-            # Leaf value uses the ORIGINAL uncentred g (Newton step).
+            # Normalise g and h per node so norm_gain ∈ [0, 1] for any loss.
+            # g: centre (G_total=0 → parent term cancels) then divide by std
+            #    → norm_gain = within-node variance fraction explained.
+            # h: divide by mean (H_total → n_node) so the scale of h_i
+            #    (which varies across objectives, e.g. p(1-p) for binary)
+            #    does not affect the threshold.  Both normalisations happen
+            #    only for split scoring; leaf value uses the ORIGINAL g/h.
             g_n = g[idx]
             g_centred = g_n - g_n.mean()
             g_std = float(np.std(g_centred)) + 1e-8
             g_norm = (g_centred / g_std).astype(np.float32)
-            return g_norm, h[idx]
+
+            h_n = h[idx]
+            h_mean = float(h_n.mean()) + 1e-8
+            h_norm = (h_n / h_mean).astype(np.float32)
+            return g_norm, h_norm
 
         def leaf_fn(idx: np.ndarray, _g_centred: np.ndarray, _h: np.ndarray) -> float:
             return float(-g[idx].sum() / (h[idx].sum() + lam))

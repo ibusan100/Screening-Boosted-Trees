@@ -145,10 +145,15 @@ class ObliviousTree:
         lam = self.params.lam
 
         def g_fn(idx: np.ndarray):
+            # Same normalisation as ScreeningTree.fit_gradients:
+            # g → mean=0, std=1 (variance fraction gain, O(1) across rounds)
+            # h → mean=1 (H_total → n_node; objective-invariant threshold)
             g_n = g[idx]
             g_c = g_n - g_n.mean()
             g_std = float(np.std(g_c)) + 1e-8
-            return (g_c / g_std).astype(np.float32), h[idx]
+            h_n = h[idx]
+            h_mean = float(h_n.mean()) + 1e-8
+            return (g_c / g_std).astype(np.float32), (h_n / h_mean).astype(np.float32)
 
         def leaf_fn(idx: np.ndarray) -> float:
             if len(idx) == 0:

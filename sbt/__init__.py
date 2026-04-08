@@ -1,5 +1,5 @@
 """
-Screening Boosted Trees (sbt) — M2 release.
+Screening Boosted Trees (sbt) — M4 release.
 
 A GBDT framework where each candidate split is scored by an *absolute*
 relevance value derived from the screening transform in "Screening Is Enough"
@@ -21,6 +21,7 @@ from .binning import Binner
 from .booster import ScreeningBooster
 from .diagnostics import NodeDiagnostics, ScreeningDiagnostics
 from .oblivious_tree import ObliviousTree
+from .param_search import ScreeningParamSearch
 from .screening_split import (
     ScreeningParams,
     build_histogram_numpy,
@@ -35,6 +36,7 @@ __all__ = [
     "ScreeningParams",
     "ScreeningBooster",
     "ObliviousTree",
+    "ScreeningParamSearch",
     "ScreeningTree",
     "build_histogram_numpy",
     "screening_split_numpy",
