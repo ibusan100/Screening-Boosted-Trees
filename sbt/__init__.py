@@ -20,6 +20,7 @@ Triton-accelerated path (requires [triton] extra):
 from .binning import Binner
 from .booster import ScreeningBooster
 from .diagnostics import NodeDiagnostics, ScreeningDiagnostics
+from .oblivious_tree import ObliviousTree
 from .screening_split import (
     ScreeningParams,
     build_histogram_numpy,
@@ -33,6 +34,7 @@ __all__ = [
     "ScreeningDiagnostics",
     "ScreeningParams",
     "ScreeningBooster",
+    "ObliviousTree",
     "ScreeningTree",
     "build_histogram_numpy",
     "screening_split_numpy",
