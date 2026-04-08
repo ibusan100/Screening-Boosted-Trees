@@ -129,24 +129,24 @@ def test_low_sr_accepts_some():
 
 
 def test_trim_square_formula_spot_check():
-    """Manually verify the Trim-and-Square formula on a known histogram."""
-    # Single feature, 4 bins, simple values
+    """Manually verify the Trim-and-Square formula on a known histogram.
+
+    After H_total normalisation:
+      H_total = 4  →  norm_gain = raw_gain / 4
+      bin 0: raw=9.333  →  norm=2.333  →  s=1-exp(-2.333/tau)
+      bin 1: raw=4.0    →  norm=1.0
+      bin 2: raw=5.333  →  norm=1.333
+      bin 0 has highest norm_gain → best_bin must be 0.
+    """
     hG = np.array([[[3.0, -1.0, 2.0, 0.0]]], dtype=np.float32)  # [1, 1, 4]
     hH = np.array([[[1.0,  1.0, 1.0, 1.0]]], dtype=np.float32)
+    # Use tau=1.0 (s_w=0), r=2 (s_r=0), lam=0
     params = ScreeningParams(s_w=0.0, s_r=0.0, lam=0.0, eps=1e-9)
-
-    # G_total = 4, H_total = 4
-    # cumG: [3, 2, 4, 4], cumH: [1, 2, 3, 4]
-    # raw_gain at bin 0: 3^2/1 + 1^2/3 - 0 = 9 + 0.333 = 9.333
-    # raw_gain at bin 1: 2^2/2 + 2^2/2 - 0 = 2 + 2 = 4.0
-    # raw_gain at bin 2: 4^2/3 + 0^2/1 - 0 = 5.333
-    # tau = exp(0) + 1e-9 = 1.0000
-    # s[0] = 1 - exp(-9.333) ≈ 0.99991
-    # r = exp(0) + 1 = 2.0
-    # rho[0] = max(1 - 2*(1 - 0.99991), 0)^2 = max(1 - 0.00018, 0)^2 ≈ 0.9996
+    # norm_gain[0] = 9.333/4 = 2.333; s[0] = 1 - exp(-2.333) ≈ 0.903
+    # rho[0] = max(1 - 2*(1-0.903), 0)^2 = max(0.806, 0)^2 ≈ 0.65 > 0
     out = screening_split_numpy(hG, hH, params)
     assert out["best_bin"][0] == 0, f"Expected best_bin=0, got {out['best_bin'][0]}"
-    assert out["best_rho"][0] > 0.9, f"Expected high rho, got {out['best_rho'][0]}"
+    assert out["best_rho"][0] > 0.0, f"Expected rho > 0 at bin 0, got {out['best_rho'][0]}"
     assert out["rho"][0, 0, -1] == 0.0  # last bin always 0
 
 

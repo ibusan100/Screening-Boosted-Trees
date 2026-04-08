@@ -1,5 +1,5 @@
 """
-Screening Boosted Trees (sbt) — M1 release.
+Screening Boosted Trees (sbt) — M2 release.
 
 A GBDT framework where each candidate split is scored by an *absolute*
 relevance value derived from the screening transform in "Screening Is Enough"
@@ -9,7 +9,7 @@ an external min_gain_to_split heuristic.
 
 NumPy reference (always available):
 
-    from sbt import ScreeningParams, ScreeningTree
+    from sbt import ScreeningParams, ScreeningBooster, ScreeningTree
     from sbt import screening_split_numpy, build_histogram_numpy
 
 Triton-accelerated path (requires [triton] extra):
@@ -18,6 +18,7 @@ Triton-accelerated path (requires [triton] extra):
 """
 
 from .binning import Binner
+from .booster import ScreeningBooster
 from .diagnostics import NodeDiagnostics, ScreeningDiagnostics
 from .screening_split import (
     ScreeningParams,
@@ -31,6 +32,7 @@ __all__ = [
     "NodeDiagnostics",
     "ScreeningDiagnostics",
     "ScreeningParams",
+    "ScreeningBooster",
     "ScreeningTree",
     "build_histogram_numpy",
     "screening_split_numpy",

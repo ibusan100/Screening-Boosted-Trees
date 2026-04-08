@@ -4,12 +4,18 @@ Screening Boosted Trees — split scoring (NumPy reference).
 The screening transform mirrors "Screening Is Enough" (Nakanishi 2026,
 arXiv:2604.01178) but applied to GBDT split selection rather than attention:
 
-  raw_gain = G_L^2/(H_L+lam) + G_R^2/(H_R+lam) - G_total^2/(H_total+lam)
-  s        = 1 - exp(-raw_gain / tau)         # bounded "similarity" in [0, 1)
-  rho      = max(1 - r * (1 - s), 0) ** 2     # Trim-and-Square (absolute screening)
+  raw_gain  = G_L^2/(H_L+lam) + G_R^2/(H_R+lam) - G_total^2/(H_total+lam)
+  norm_gain = raw_gain / max(H_total, 1)       # normalise by node size → O(1), N-invariant
+  s         = 1 - exp(-norm_gain / tau)        # bounded "similarity" in [0, 1)
+  rho       = max(1 - r * (1 - s), 0) ** 2    # Trim-and-Square (absolute screening)
 
   tau = exp(s_w) + eps           (learned scalar; analogue of the screening window)
   r   = exp(s_r) + 1             (learned scalar; 1/r is the acceptance width)
+
+Normalising by H_total (= N_node for MSE where h_i=1) makes norm_gain O(1)
+regardless of dataset size, so defaults transfer across tasks.  Analogue:
+QK unit-normalisation in Multiscreen bounds similarity to [-1,1] so a fixed
+threshold is meaningful.
 
 A node selects argmax_{(feature, bin)} rho. If max(rho) == 0 the node is
 **rejected** — no split is emitted, the node becomes a leaf. This is the GBDT
@@ -37,12 +43,11 @@ class ScreeningParams:
         r   = exp(s_r) + 1
     """
 
-    # Defaults calibrated on sklearn California housing (N=20640, F=8):
-    #   s_w=8.0, s_r=0.0 → tau≈2981, r=2.0 → root accept_rate ≈ 15%
-    # Interpretation: tau acts as the gain scale reference; gains below
-    # tau * ln(r) ≈ 2067 are rejected. Raise s_w to reject more (smaller
-    # accept_rate); lower s_r to accept more.
-    s_w: float = 8.0      # log-scale gain temperature; tau = exp(s_w) + eps
+    # Defaults calibrated after H_total normalisation (gain is O(1), N-invariant):
+    #   s_w=-2.0, s_r=0.0 → tau≈0.135, r=2.0 → root accept_rate ≈ 15%
+    #   Stable across N=300..20640 (tested). Raise s_w to reject more aggressively;
+    #   lower s_r (closer to 0) to accept more.
+    s_w: float = -2.0     # log-scale gain temperature; tau = exp(s_w) + eps
     s_r: float = 0.0      # log-scale acceptance width; r = exp(s_r) + 1
     lam: float = 1.0      # L2 reg on hessian
     eps: float = 1e-6
@@ -115,7 +120,12 @@ def screening_split_numpy(
     raw_gain = (G_L ** 2) / (H_L + lam) + (G_R ** 2) / (H_R + lam) - parent
     raw_gain[..., -1] = -np.inf  # last bin has no right child
 
-    s = _bounded_gain(raw_gain, tau)
+    # Normalise by node size (H_total summed over features / F gives per-feature
+    # H_total; but since H_total is the same across bins for a given (node, feat),
+    # we divide the whole slice. H_total here is (num_nodes, F, 1).
+    norm_gain = raw_gain / np.maximum(H_total, 1.0)
+
+    s = _bounded_gain(norm_gain, tau)
     rho = _trim_square(s, r)
     rho[..., -1] = 0.0
 

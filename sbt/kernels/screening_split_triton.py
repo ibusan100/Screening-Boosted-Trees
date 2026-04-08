@@ -101,11 +101,13 @@ def _screening_split_kernel(
     H_R = H_total - H_L
 
     raw = (G_L * G_L) / (H_L + lam) + (G_R * G_R) / (H_R + lam) - parent
-    raw = tl.maximum(raw, 0.0)
+    # Normalise by node size (H_total) → N-invariant, O(1) scale.
+    norm = raw / tl.maximum(H_total, 1.0)
+    norm = tl.maximum(norm, 0.0)
 
     tau = tl.exp(s_w) + eps
     r = tl.exp(s_r) + 1.0
-    s = 1.0 - tl.exp(-raw / tau)
+    s = 1.0 - tl.exp(-norm / tau)
     rho = tl.maximum(1.0 - r * (1.0 - s), 0.0)
     rho = rho * rho
 
