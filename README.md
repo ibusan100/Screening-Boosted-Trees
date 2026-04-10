@@ -111,4 +111,4 @@ ScreeningBooster(
 
 ## License
 
-MIT © 2026 ibusan100
+MIT © 2026 ibu_3(ibusan100)
