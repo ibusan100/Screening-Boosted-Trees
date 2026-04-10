@@ -42,13 +42,14 @@ __all__ = [
     "screening_split_numpy",
     "screening_split_triton",
     "build_histogram_triton",
+    "build_missing_stats_triton",
 ]
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
 
 def __getattr__(name: str):
-    if name in {"screening_split_triton", "build_histogram_triton"}:
+    if name in {"screening_split_triton", "build_histogram_triton", "build_missing_stats_triton"}:
         try:
             from .kernels import screening_split_triton as _mod
         except ImportError as e:

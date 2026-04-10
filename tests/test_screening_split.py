@@ -9,7 +9,7 @@ Layer structure (CLAUDE.md Inv-2):
 import numpy as np
 import pytest
 
-from sbt.screening_split import (
+from ibu_boost.screening_split import (
     ScreeningParams,
     build_histogram_numpy,
     screening_split_numpy,

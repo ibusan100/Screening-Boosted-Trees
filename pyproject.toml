@@ -3,14 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "screening-boosted-trees"
-version = "0.0.1"
+name = "ibu-boost"
+version = "0.1.0"
 description = "GBDT with absolute-threshold screening split selection, accelerated by fused Triton kernels."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
-    { name = "Screening Boosted Trees authors" },
+    { name = "ibusan100" },
 ]
 keywords = [
     "gbdt",
@@ -22,7 +22,7 @@ keywords = [
     "gpu",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Operating System :: Microsoft :: Windows",
@@ -40,7 +40,6 @@ dependencies = [
 # Triton-accelerated GPU path. The wheel selection is automatic per-platform:
 #   - Windows  -> triton-windows  (community wheel that mirrors upstream Triton)
 #   - Linux    -> triton          (official)
-#   - macOS    -> triton          (official; CPU-only build)
 # Both packages expose `import triton` and `import triton.language as tl`,
 # so the kernel source is identical across platforms.
 triton = [
@@ -62,4 +61,4 @@ Repository = "https://github.com/ibusan100/Screening-Boosted-Trees"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["sbt*"]
+include = ["ibu_boost*"]

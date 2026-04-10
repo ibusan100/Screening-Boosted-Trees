@@ -5,6 +5,10 @@ Splits each feature into at most `num_bins` equal-frequency bins using
 percentile cut points. Features with fewer unique values get fewer bins
 naturally; all are stored as int32 indices in [0, actual_bins-1].
 
+NaN (missing) values are mapped to the sentinel MISSING_BIN = -1.
+Down-stream code uses MISSING_BIN to separate missing samples for
+XGBoost-style default-direction learning.
+
 Thresholds are stored per-feature for use in predict() routing:
     X[:, f] <= bin_edges[f][best_bin + 1]  →  left child
 """
@@ -13,9 +17,16 @@ from __future__ import annotations
 
 import numpy as np
 
+#: Sentinel value assigned to NaN entries in X_binned.
+#: Must be negative so that valid bins (>= 0) can be distinguished easily.
+MISSING_BIN: int = -1
+
 
 class Binner:
     """Fit quantile bin edges on training data; transform to int32 bin indices.
+
+    NaN inputs are assigned MISSING_BIN (=-1) and are excluded from
+    quantile computation.
 
     Parameters
     ----------
@@ -35,7 +46,11 @@ class Binner:
         self.bin_edges_ = []
         quantiles = np.linspace(0.0, 100.0, self.num_bins + 1)
         for f in range(F):
-            edges = np.unique(np.percentile(X[:, f], quantiles))
+            col = X[:, f]
+            valid = col[np.isfinite(col)]  # exclude NaN / Inf from quantile fit
+            if len(valid) == 0:
+                valid = np.array([0.0])
+            edges = np.unique(np.percentile(valid, quantiles))
             self.bin_edges_.append(edges.astype(np.float64))
         return self
 
@@ -46,10 +61,12 @@ class Binner:
         X_binned = np.empty((N, F), dtype=np.int32)
         for f in range(F):
             edges = self.bin_edges_[f]
-            # Internal cut points: edges[1:-1] (exclude the min/max endpoints).
-            # searchsorted gives bin index in [0, len(cuts)] where len(cuts) = len(edges)-2.
             cuts = edges[1:-1]
-            X_binned[:, f] = np.searchsorted(cuts, X[:, f], side="right").astype(np.int32)
+            col = X[:, f]
+            missing = ~np.isfinite(col)
+            bins = np.searchsorted(cuts, col, side="right").astype(np.int32)
+            bins[missing] = MISSING_BIN
+            X_binned[:, f] = bins
         return X_binned
 
     def fit_transform(self, X: np.ndarray) -> np.ndarray:

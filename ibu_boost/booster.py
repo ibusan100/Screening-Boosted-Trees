@@ -58,6 +58,9 @@ class ScreeningBooster:
         Base learner type.
     objective : {"regression", "binary"}
         Loss function.
+    device : {"cpu", "cuda"}
+        "cuda" routes histogram building and screening through Triton kernels;
+        requires torch + triton installed and a CUDA-capable GPU.
     """
 
     def __init__(
@@ -70,6 +73,7 @@ class ScreeningBooster:
         params: Optional[ScreeningParams] = None,
         tree_type: Literal["non_oblivious", "oblivious"] = "non_oblivious",
         objective: Literal["regression", "binary"] = "regression",
+        device: str = "cpu",
     ):
         self.n_estimators = n_estimators
         self.learning_rate = learning_rate
@@ -78,6 +82,7 @@ class ScreeningBooster:
         self.num_bins = num_bins
         self.tree_type = tree_type
         self.objective = objective
+        self.device = device
 
         # Boosting default: s_r=-6.0 (r≈1.0025).  Standalone-tree default s_r=0.0
         # is too strict for boosting because per-round gains — even after per-node
@@ -110,9 +115,16 @@ class ScreeningBooster:
         else:
             raise ValueError(f"Unknown objective: {self.objective!r}")
 
-        # Fit binner once; reuse every round.
+        # Fit binner and bin X once; reuse every round.
         self._binner = Binner(self.num_bins)
         self._binner.fit(X)
+        X_binned = self._binner.transform(X).astype(np.int32)
+
+        # For CUDA: pre-load X_binned to GPU once; reuse across all rounds.
+        X_gpu = None
+        if self.device == "cuda":
+            import torch
+            X_gpu = torch.from_numpy(X_binned).cuda()
 
         self.trees_ = []
         self.round_diagnostics_ = []
@@ -120,8 +132,22 @@ class ScreeningBooster:
         for _ in range(self.n_estimators):
             g, h = self._gradients(y, y_pred)
 
+            # For CUDA: upload g/h once per round (they change each round).
+            g_gpu = h_gpu = None
+            if self.device == "cuda":
+                import torch
+                g_gpu = torch.from_numpy(g).cuda()
+                h_gpu = torch.from_numpy(h).cuda()
+
             tree = self._make_tree()
-            tree.fit_gradients(X, g, h, binner=self._binner)
+            tree.fit_gradients(
+                X, g, h,
+                binner=self._binner,
+                X_binned=X_binned,
+                X_gpu=X_gpu,
+                g_gpu=g_gpu,
+                h_gpu=h_gpu,
+            )
 
             self.trees_.append(tree)
             self.round_diagnostics_.append(tree.diagnostics)
@@ -149,6 +175,7 @@ class ScreeningBooster:
                 min_samples_leaf=self.min_samples_leaf,
                 num_bins=self.num_bins,
                 params=self.params,
+                device=self.device,
             )
         elif self.tree_type == "oblivious":
             return ObliviousTree(
@@ -157,6 +184,7 @@ class ScreeningBooster:
                 num_bins=self.num_bins,
                 params=self.params,
                 screening_mode="per_level",
+                device=self.device,
             )
         else:
             raise ValueError(f"Unknown tree_type: {self.tree_type!r}")

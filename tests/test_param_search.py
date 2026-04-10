@@ -5,7 +5,7 @@ ScreeningParamSearch tests — correctness, output structure, basic convergence.
 import numpy as np
 import pytest
 
-from sbt import ScreeningParamSearch
+from ibu_boost import ScreeningParamSearch
 
 
 RNG = np.random.default_rng(42)

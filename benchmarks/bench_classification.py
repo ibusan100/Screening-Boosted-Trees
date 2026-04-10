@@ -25,8 +25,8 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OrdinalEncoder
 
-from sbt.booster import ScreeningBooster
-from sbt.screening_split import ScreeningParams
+from ibu_boost.booster import ScreeningBooster
+from ibu_boost.screening_split import ScreeningParams
 
 SEEDS = [0, 1, 2]
 N_EST = 100

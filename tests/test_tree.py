@@ -5,8 +5,8 @@ Tests for ScreeningTree — fit, predict, diagnostics.
 import numpy as np
 import pytest
 
-from sbt.tree import ScreeningTree
-from sbt.screening_split import ScreeningParams
+from ibu_boost.tree import ScreeningTree
+from ibu_boost.screening_split import ScreeningParams
 
 
 # ---------------------------------------------------------------------------

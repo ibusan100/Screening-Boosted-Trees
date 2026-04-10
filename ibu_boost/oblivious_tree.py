@@ -30,8 +30,22 @@ from .diagnostics import NodeDiagnostics, ScreeningDiagnostics
 from .screening_split import (
     ScreeningParams,
     build_histogram_numpy,
+    build_missing_stats,
     screening_split_numpy,
 )
+
+_TRITON_AVAILABLE: bool | None = None
+
+
+def _triton_available() -> bool:
+    global _TRITON_AVAILABLE
+    if _TRITON_AVAILABLE is None:
+        try:
+            import torch
+            _TRITON_AVAILABLE = torch.cuda.is_available()
+        except ImportError:
+            _TRITON_AVAILABLE = False
+    return _TRITON_AVAILABLE
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +59,7 @@ class _LevelSplit:
     feat: int
     bin_idx: int
     threshold: float
+    default_dir: int = 0  # 0=missing→left, 1=missing→right
 
 
 # ---------------------------------------------------------------------------
@@ -80,28 +95,54 @@ class ObliviousTree:
         num_bins: int = 255,
         params: Optional[ScreeningParams] = None,
         screening_mode: str = "per_level",
+        device: str = "cpu",
     ):
         self.max_depth = max_depth
         self.min_samples_leaf = min_samples_leaf
         self.num_bins = num_bins
         self.params = params if params is not None else ScreeningParams()
         self.screening_mode = screening_mode
+        self._device = device
 
         self._binner: Optional[Binner] = None
         self._level_splits: list[_LevelSplit] = []
         self._leaf_values: Optional[np.ndarray] = None
         self._diagnostics: Optional[ScreeningDiagnostics] = None
+        self._X_gpu = None   # pre-loaded CUDA tensor (int32 binned X)
+        self._g_gpu = None   # pre-loaded CUDA tensor (float32 raw gradients)
+        self._h_gpu = None   # pre-loaded CUDA tensor (float32 raw hessians)
+        self._y_gpu = None   # pre-loaded CUDA tensor (float32 targets, standalone)
+        self._mode: str = "standalone"   # "standalone" | "boosting"
 
     # ------------------------------------------------------------------ #
     # Public fit interfaces                                                #
     # ------------------------------------------------------------------ #
 
-    def fit(self, X: np.ndarray, y: np.ndarray) -> "ObliviousTree":
-        """Standalone tree: gradients recentred + normalised per node."""
-        X = np.asarray(X, dtype=np.float64)
+    def fit(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        *,
+        binner: Optional[Binner] = None,
+        X_binned: Optional[np.ndarray] = None,
+        X_gpu=None,
+    ) -> "ObliviousTree":
+        """Standalone tree: gradients recentred + std-normalised per node."""
         y = np.asarray(y, dtype=np.float32)
-        self._binner = Binner(self.num_bins)
-        X_binned = self._binner.fit_transform(X).astype(np.int32)
+        self._mode = "standalone"
+
+        if X_binned is not None:
+            self._binner = binner
+        else:
+            X = np.asarray(X, dtype=np.float64)
+            self._binner = Binner(self.num_bins)
+            X_binned = self._binner.fit_transform(X).astype(np.int32)
+
+        if self._device == "cuda":
+            import torch
+            self._y_gpu = torch.from_numpy(y).cuda()
+            self._g_gpu = None
+            self._h_gpu = None
 
         def g_fn(idx: np.ndarray):
             y_n = y[idx]
@@ -112,6 +153,7 @@ class ObliviousTree:
         def leaf_fn(idx: np.ndarray) -> float:
             return float(np.mean(y[idx])) if len(idx) > 0 else 0.0
 
+        self._maybe_upload_X(X_binned, X_gpu=X_gpu)
         self._fit_core(X_binned, g_fn, leaf_fn)
         return self
 
@@ -121,6 +163,11 @@ class ObliviousTree:
         g: np.ndarray,
         h: np.ndarray,
         binner: Optional[Binner] = None,
+        *,
+        X_binned: Optional[np.ndarray] = None,
+        X_gpu=None,
+        g_gpu=None,
+        h_gpu=None,
     ) -> "ObliviousTree":
         """Boosting mode: g/h supplied externally; leaf = −G/(H+λ).
 
@@ -130,24 +177,41 @@ class ObliviousTree:
         g      : (N,)   float32 — first-order gradient from the loss.
         h      : (N,)   float32 — second-order gradient (hessian).
         binner : pre-fitted Binner to reuse across rounds.
+        X_binned: optional pre-computed binned X (skips binner.transform).
+        X_gpu   : optional pre-loaded GPU tensor for X_binned (skips re-upload).
+        g_gpu   : optional pre-loaded GPU tensor for g (skips per-round upload).
+        h_gpu   : optional pre-loaded GPU tensor for h.
         """
-        X = np.asarray(X, dtype=np.float64)
         g = np.asarray(g, dtype=np.float32)
         h = np.asarray(h, dtype=np.float32)
+        self._mode = "boosting"
 
-        if binner is not None:
+        if X_binned is not None:
+            self._binner = binner
+        elif binner is not None:
+            X = np.asarray(X, dtype=np.float64)
             self._binner = binner
             X_binned = binner.transform(X).astype(np.int32)
         else:
+            X = np.asarray(X, dtype=np.float64)
             self._binner = Binner(self.num_bins)
             X_binned = self._binner.fit_transform(X).astype(np.int32)
 
         lam = self.params.lam
 
+        if self._device == "cuda":
+            if g_gpu is not None:
+                self._g_gpu = g_gpu
+                self._h_gpu = h_gpu
+            else:
+                import torch
+                self._g_gpu = torch.from_numpy(g).cuda()
+                self._h_gpu = torch.from_numpy(h).cuda()
+            self._y_gpu = None
+
         def g_fn(idx: np.ndarray):
-            # Same normalisation as ScreeningTree.fit_gradients:
-            # g → mean=0, std=1 (variance fraction gain, O(1) across rounds)
-            # h → mean=1 (H_total → n_node; objective-invariant threshold)
+            # CPU normalisation — only used in CPU mode (_find_level_split skips
+            # this in CUDA mode and uses GPU gather+normalise instead).
             g_n = g[idx]
             g_c = g_n - g_n.mean()
             g_std = float(np.std(g_c)) + 1e-8
@@ -160,8 +224,24 @@ class ObliviousTree:
                 return 0.0
             return float(-g[idx].sum() / (h[idx].sum() + lam))
 
+        self._maybe_upload_X(X_binned, X_gpu=X_gpu)
         self._fit_core(X_binned, g_fn, leaf_fn)
         return self
+
+    def _maybe_upload_X(self, X_binned: np.ndarray, X_gpu=None) -> None:
+        """Upload X_binned to GPU once at fit start (device='cuda' only).
+
+        If X_gpu is provided (pre-loaded by caller), reuse it to avoid
+        redundant round-to-round uploads.
+        """
+        if self._device == "cuda":
+            if X_gpu is not None:
+                self._X_gpu = X_gpu
+            else:
+                import torch
+                self._X_gpu = torch.from_numpy(X_binned).cuda()
+        else:
+            self._X_gpu = None
 
     # ------------------------------------------------------------------ #
     # Core level-by-level fit                                              #
@@ -190,7 +270,7 @@ class ObliviousTree:
             if not splittable:
                 break  # Every node is too small — stop growing
 
-            feat, bin_idx, accepted = self._find_level_split(
+            feat, bin_idx, default_dir, accepted = self._find_level_split(
                 X_binned, g_fn, splittable, B, F, depth
             )
 
@@ -198,14 +278,17 @@ class ObliviousTree:
                 break  # Screening rejected all level candidates
 
             threshold = self._binner.threshold(feat, bin_idx)
-            self._level_splits.append(_LevelSplit(depth, feat, bin_idx, threshold))
+            self._level_splits.append(_LevelSplit(depth, feat, bin_idx, threshold, default_dir))
 
             # Split every node (including small ones — they're split passively)
             new_nodes: list[np.ndarray] = []
             for idx in nodes:
-                mask = X_binned[idx, feat] <= bin_idx
-                new_nodes.append(idx[mask])
-                new_nodes.append(idx[~mask])
+                feat_vals  = X_binned[idx, feat]
+                goes_right = feat_vals > bin_idx        # NaN→-1, always False
+                if default_dir == 1:                    # missing → right
+                    goes_right = goes_right | (feat_vals < 0)
+                new_nodes.append(idx[~goes_right])
+                new_nodes.append(idx[goes_right])
             nodes = new_nodes
 
         # Leaf values indexed by bit-path (see predict)
@@ -221,24 +304,66 @@ class ObliviousTree:
         num_bins: int,
         F: int,
         depth: int,
-    ) -> tuple[int, int, bool]:
+    ) -> tuple[int, int, int, bool]:
         """Aggregate histograms across splittable nodes and apply screening once."""
-        agg_G = np.zeros((1, F, num_bins), dtype=np.float32)
-        agg_H = np.zeros((1, F, num_bins), dtype=np.float32)
-        total_n = 0
+        total_n = sum(len(idx) for idx in splittable)
 
-        for idx in splittable:
-            g_norm, h_n = g_fn(idx)
-            nid = np.zeros(len(idx), dtype=np.int32)
-            hG, hH = build_histogram_numpy(X_binned[idx], g_norm, h_n, nid, 1, num_bins)
-            agg_G += hG
-            agg_H += hH
-            total_n += len(idx)
+        if self._device == "cuda":
+            import torch
+            from .kernels.screening_split_triton import (
+                build_histogram_triton,
+                build_missing_stats_triton,
+                normalize_gh_batched_gpu,
+                normalize_y_batched_gpu,
+                screening_split_triton,
+            )
+            # Pack sample indices; use pre-loaded GPU tensors — no CPU X/g/h copies.
+            K = len(splittable)
+            all_idx = np.concatenate(splittable)
+            all_nid = np.concatenate([
+                np.full(len(idx), i, dtype=np.int32) for i, idx in enumerate(splittable)
+            ])
+            idx_t = torch.from_numpy(all_idx).long().cuda()
+            nid_t = torch.from_numpy(all_nid).long().cuda()
 
-        result = screening_split_numpy(agg_G, agg_H, self.params)
+            X_t = self._X_gpu[idx_t]              # GPU gather — no CPU X copy
+
+            if self._mode == "boosting":
+                g_raw = self._g_gpu[idx_t]         # GPU gather — no CPU g/h copy
+                h_raw = self._h_gpu[idx_t]
+                g_t, h_t = normalize_gh_batched_gpu(g_raw, h_raw, nid_t, K)
+            else:  # standalone — centre + std-normalise on GPU
+                y_raw = self._y_gpu[idx_t]
+                g_t, h_t = normalize_y_batched_gpu(y_raw, nid_t, K, std_normalize=True)
+
+            hG_all, hH_all = build_histogram_triton(X_t, g_t, h_t, nid_t.int(), K, num_bins)
+            Gm_all, Hm_all = build_missing_stats_triton(X_t, g_t, h_t, nid_t.int(), K)
+
+            # Aggregate across nodes (sum over node dimension → [1, F, B])
+            agg_G  = hG_all.sum(dim=0, keepdim=True)
+            agg_H  = hH_all.sum(dim=0, keepdim=True)
+            agg_Gm = Gm_all.sum(dim=0, keepdim=True)
+            agg_Hm = Hm_all.sum(dim=0, keepdim=True)
+
+            out = screening_split_triton(agg_G, agg_H, self.params, agg_Gm, agg_Hm)
+            result = {k: (v.cpu().numpy() if hasattr(v, "cpu") else v)
+                      for k, v in out.items()}
+        else:
+            agg_G  = np.zeros((1, F, num_bins), dtype=np.float32)
+            agg_H  = np.zeros((1, F, num_bins), dtype=np.float32)
+            agg_Gm = np.zeros((1, F), dtype=np.float32)
+            agg_Hm = np.zeros((1, F), dtype=np.float32)
+            for idx in splittable:
+                g_norm, h_n = g_fn(idx)
+                nid = np.zeros(len(idx), dtype=np.int32)
+                X_node = X_binned[idx]
+                hG, hH = build_histogram_numpy(X_node, g_norm, h_n, nid, 1, num_bins)
+                Gm, Hm = build_missing_stats(X_node, g_norm, h_n, nid, num_nodes=1)
+                agg_G += hG; agg_H += hH; agg_Gm += Gm; agg_Hm += Hm
+            result = screening_split_numpy(agg_G, agg_H, self.params, agg_Gm, agg_Hm)
 
         # Diagnostics — one entry per level (node_id = depth for clarity)
-        rho_flat = result["rho"].ravel()
+        rho_flat = result.get("rho", np.array([result["best_rho"][0]])).ravel()
         accepted_vals = rho_flat[rho_flat > 0.0]
         n_cand = int((num_bins - 1) * F)
         n_acc = len(accepted_vals)
@@ -253,9 +378,12 @@ class ObliviousTree:
         ))
 
         if not result["accepted_mask"][0]:
-            return -1, -1, False
+            return -1, -1, 0, False
 
-        return int(result["best_feat"][0]), int(result["best_bin"][0]), True
+        best_feat   = int(result["best_feat"][0])
+        best_bin    = int(result["best_bin"][0])
+        default_dir = int(result["best_default_dir"][0])
+        return best_feat, best_bin, default_dir, True
 
     # ------------------------------------------------------------------ #
     # Predict                                                              #
@@ -272,8 +400,10 @@ class ObliviousTree:
 
         leaf_idx = np.zeros(len(X), dtype=np.int32)
         for split in self._level_splits:
-            goes_right = (X[:, split.feat] > split.threshold).astype(np.int32)
-            leaf_idx = leaf_idx * 2 + goes_right
+            goes_right = X[:, split.feat] > split.threshold  # NaN → False (left)
+            if split.default_dir == 1:                        # missing → right
+                goes_right = goes_right | np.isnan(X[:, split.feat])
+            leaf_idx = leaf_idx * 2 + goes_right.astype(np.int32)
 
         return self._leaf_values[leaf_idx]
 

@@ -5,7 +5,7 @@ ObliviousTree tests — correctness, screening semantics, booster integration.
 import numpy as np
 import pytest
 
-from sbt import ObliviousTree, ScreeningBooster, ScreeningParams
+from ibu_boost import ObliviousTree, ScreeningBooster, ScreeningParams
 
 
 RNG = np.random.default_rng(42)

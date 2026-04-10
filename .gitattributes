@@ -1,0 +1,7 @@
+# Normalise line endings to LF in the repository
+* text=auto eol=lf
+
+# Binaries — no line-ending conversion
+*.pyc binary
+*.png binary
+*.jpg binary
