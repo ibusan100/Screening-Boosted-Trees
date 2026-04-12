@@ -3,6 +3,7 @@
 Gradient-boosted decision trees where each candidate split is scored by an
 **absolute relevance** value derived from the *screening* transform introduced
 in ["Screening Is Enough"](https://arxiv.org/abs/2604.01178) (Nakanishi 2026).
+The paper was originally written for Transformers, but the core idea — replacing relative comparison with absolute-threshold rejection — maps naturally onto GBDT split selection.
 
 Instead of selecting the *relatively* best split among all candidates, a
 node with `max(ρ) == 0` emits **no split at all** — becoming a leaf without
